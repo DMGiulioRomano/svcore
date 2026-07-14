@@ -193,14 +193,7 @@ private:
     int getPeakPickWindowSize(PeakPickType type, sv_samplerate_t sampleRate,
                               int bin, double &dist) const;
 
-    std::pair<sv_frame_t, sv_frame_t> getSourceSampleRange(int column) const {
-        sv_frame_t startFrame = m_windowIncrement * sv_frame_t(column);
-        sv_frame_t endFrame = startFrame + m_windowSize;
-        // Cols are centred on the audio sample (e.g. col 0 is centred at sample 0)
-        startFrame -= m_windowSize / 2;
-        endFrame -= m_windowSize / 2;
-        return { startFrame, endFrame };
-    }
+    std::pair<sv_frame_t, sv_frame_t> getSourceSampleRange(int column) const;
 
     const doublecomplexvec_t &getFFTColumn(int column) const;
     void getFFTColumnUncached(int column, doublecomplexvec_t &) const;
