@@ -22,6 +22,7 @@
 #include "TestMovingMedian.h"
 #include "TestById.h"
 #include "TestEventSeries.h"
+#include "TestStorageAdviser.h"
 #include "StressEventSeries.h"
 
 #include "system/Init.h"
@@ -94,6 +95,11 @@ int main(int argc, char *argv[])
     }
     {
         TestById t;
+        if (QTest::qExec(&t, argc, argv) == 0) ++good;
+        else ++bad;
+    }
+    {
+        TestStorageAdviser t;
         if (QTest::qExec(&t, argc, argv) == 0) ++good;
         else ++bad;
     }

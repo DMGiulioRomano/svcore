@@ -20,9 +20,13 @@
 
 #include "system/System.h"
 
+#include <QMutexLocker>
+
 #include <iostream>
 
 namespace sv {
+
+QMutex StorageAdviser::m_mutex;
 
 double StorageAdviser::m_greed = 1.0;
 
@@ -71,6 +75,49 @@ StorageAdviser::Recommendation
 StorageAdviser::recommend(Criteria criteria,
                           size_t minimumSize,
                           size_t maximumSize)
+{
+    QMutexLocker locker(&m_mutex);
+    return recommendLocked(criteria, minimumSize, maximumSize);
+}
+
+StorageAdviser::Recommendation
+StorageAdviser::recommend(Criteria criteria,
+                          size_t minimumSize,
+                          size_t maximumSize,
+                          AllocationToken &token)
+{
+    QMutexLocker locker(&m_mutex);
+
+    Recommendation rec = recommendLocked(criteria, minimumSize, maximumSize);
+
+    // The area planned here must match the choice the caller will
+    // make from the recommendation (as e.g. AudioFileReaderFactory
+    // does): memory only if the recommendation actually steers them
+    // there, disc in every other case
+    AllocationArea area = DiscAllocation;
+    if (rec & (UseMemory | PreferMemory)) {
+        area = MemoryAllocation;
+    }
+
+    recordPlannedAllocation(area, maximumSize);
+    token = AllocationToken(area, maximumSize);
+
+    return rec;
+}
+
+void
+StorageAdviser::releaseAllocationToken(AllocationToken &token)
+{
+    if (!token.isActive()) return;
+    QMutexLocker locker(&m_mutex);
+    recordDoneAllocation(token.getArea(), token.getSize());
+    token = AllocationToken();
+}
+
+StorageAdviser::Recommendation
+StorageAdviser::recommendLocked(Criteria criteria,
+                                size_t minimumSize,
+                                size_t maximumSize)
 {
     SVDEBUG << "StorageAdviser::recommend: criteria " << criteria
             << " (" + criteriaToString(criteria) + ")"
@@ -146,10 +193,14 @@ StorageAdviser::recommend(Criteria criteria,
         memoryFree = 0;
     }
 
-    //!!! We have a potentially serious problem here if multiple
-    //recommendations are made in advance of any of the resulting
-    //allocations, as the allocations that have been recommended for
-    //won't be taken into account in subsequent recommendations.
+    // If multiple recommendations are made in advance of any of the
+    // resulting allocations, the allocations that have been
+    // recommended for won't be taken into account in subsequent
+    // recommendations - unless the caller uses the overload of
+    // recommend() taking an AllocationToken, which registers the
+    // planned allocation at recommendation time. Callers that expect
+    // to allocate following the recommendation should use that
+    // overload.
 
     StorageStatus memoryStatus = Unknown;
     StorageStatus discStatus = Unknown;
@@ -257,6 +308,29 @@ StorageAdviser::recommend(Criteria criteria,
 void
 StorageAdviser::notifyPlannedAllocation(AllocationArea area, size_t size)
 {
+    QMutexLocker locker(&m_mutex);
+    recordPlannedAllocation(area, size);
+}
+
+void
+StorageAdviser::notifyDoneAllocation(AllocationArea area, size_t size)
+{
+    QMutexLocker locker(&m_mutex);
+    recordDoneAllocation(area, size);
+}
+
+size_t
+StorageAdviser::getPlannedAllocation(AllocationArea area)
+{
+    QMutexLocker locker(&m_mutex);
+    if (area == MemoryAllocation) return m_memoryPlanned;
+    else if (area == DiscAllocation) return m_discPlanned;
+    else return 0;
+}
+
+void
+StorageAdviser::recordPlannedAllocation(AllocationArea area, size_t size)
+{
     if (area == MemoryAllocation) m_memoryPlanned += size;
     else if (area == DiscAllocation) m_discPlanned += size;
     SVDEBUG << "StorageAdviser: storage planned up: now memory: " << m_memoryPlanned << ", disc "
@@ -264,13 +338,13 @@ StorageAdviser::notifyPlannedAllocation(AllocationArea area, size_t size)
 }
 
 void
-StorageAdviser::notifyDoneAllocation(AllocationArea area, size_t size)
+StorageAdviser::recordDoneAllocation(AllocationArea area, size_t size)
 {
     if (area == MemoryAllocation) {
         if (m_memoryPlanned > size) m_memoryPlanned -= size;
         else m_memoryPlanned = 0;
     } else if (area == DiscAllocation) {
-        if (m_discPlanned > size) m_discPlanned -= size; 
+        if (m_discPlanned > size) m_discPlanned -= size;
         else m_discPlanned = 0;
     }
     SVDEBUG << "StorageAdviser: storage planned down: now memory: " << m_memoryPlanned << ", disc "
@@ -280,6 +354,7 @@ StorageAdviser::notifyDoneAllocation(AllocationArea area, size_t size)
 void
 StorageAdviser::setFixedRecommendation(Recommendation recommendation)
 {
+    QMutexLocker locker(&m_mutex);
     m_baseRecommendation = recommendation;
 }
 
@@ -288,6 +363,7 @@ StorageAdviser::setRAMGreed(double greed)
 {
     if (greed < 0.0) greed = 0.0;
     if (greed > 1.0) greed = 1.0;
+    QMutexLocker locker(&m_mutex);
     m_greed = greed;
 }
 

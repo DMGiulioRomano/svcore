@@ -8,6 +8,7 @@ TEST_HEADERS = \
 	     TestEventSeries.h \
 	     TestRangeMapper.h \
 	     TestScaleTickIntervals.h \
+	     TestStorageAdviser.h \
 	     TestStringBits.h \
 	     TestVampRealTime.h \
 	     StressEventSeries.h
