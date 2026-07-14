@@ -311,6 +311,22 @@ FFTModel::getValuesAt(int x, float *reals, float *imags, int minbin, int count) 
     return true;
 }
 
+pair<sv_frame_t, sv_frame_t>
+FFTModel::getSourceSampleRange(int column) const
+{
+    // Columns are relative to the model, but the frames we read from
+    // the source model are absolute - so we must add the model's own
+    // start frame offset
+    auto model = ModelById::getAs<DenseTimeValueModel>(m_model);
+    sv_frame_t modelStart = model ? model->getStartFrame() : 0;
+    sv_frame_t startFrame = modelStart + m_windowIncrement * sv_frame_t(column);
+    sv_frame_t endFrame = startFrame + m_windowSize;
+    // Cols are centred on the audio sample (e.g. col 0 is centred at sample 0)
+    startFrame -= m_windowSize / 2;
+    endFrame -= m_windowSize / 2;
+    return { startFrame, endFrame };
+}
+
 floatvec_t
 FFTModel::getSourceSamples(int column) const
 {
