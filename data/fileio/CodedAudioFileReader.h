@@ -18,6 +18,8 @@
 
 #include "AudioFileReader.h"
 
+#include "base/StorageAdviser.h"
+
 #include <QMutex>
 #include <QReadWriteLock>
 
@@ -65,6 +67,18 @@ public:
     
     /// Intermediate cache means all CodedAudioFileReaders are quickly seekable
     bool isQuicklySeekable() const override { return true; }
+
+    /**
+     * Take over responsibility for an allocation planned through the
+     * token-accepting overload of StorageAdviser::recommend(),
+     * presumably registered when deciding where this reader should
+     * cache its decoded data. The plan stands in for the cache until
+     * decoding has completed and the actual size is known and
+     * accounted, at which point (or on destruction, whichever comes
+     * first) the token is released. The passed token is reset to
+     * inactive.
+     */
+    void takeAllocationToken(StorageAdviser::AllocationToken &token);
 
 signals:
     void progress(int);
@@ -136,6 +150,15 @@ protected:
     sv_frame_t m_clippedCount;
     sv_frame_t m_firstNonzero;
     sv_frame_t m_lastNonzero;
+
+private:
+    // Guarded by m_cacheMutex. The token holds the allocation
+    // planned at recommendation time; m_memoryCacheKb records how
+    // much we have actually registered with StorageAdviser for the
+    // in-memory cache, so that the destructor releases exactly that
+    StorageAdviser::AllocationToken m_allocationToken;
+    bool m_decodeCompleted;
+    size_t m_memoryCacheKb;
 };
 
 } // end namespace sv
