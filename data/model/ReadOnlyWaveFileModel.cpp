@@ -305,34 +305,51 @@ ReadOnlyWaveFileModel::getData(int channel,
         return {};
     }
 
+    // If the request begins before our start frame, the returned
+    // data is padded with zeros so that it remains aligned with the
+    // requested start frame. Callers index the result by absolute
+    // frame position, so returning the available data unpadded would
+    // misplace it in time (and some callers index into the result on
+    // the assumption that the requested frames were all returned).
+    sv_frame_t pad = 0;
+
     if (start >= m_startFrame) {
         start -= m_startFrame;
     } else {
         if (count <= m_startFrame - start) {
-            return {};
+            // Requested range is entirely before our start frame:
+            // return the requested number of zeros
+            return floatvec_t(count, 0.f);
         } else {
-            count -= (m_startFrame - start);
+            pad = m_startFrame - start;
+            count -= pad;
             start = 0;
         }
     }
 
     floatvec_t interleaved = m_reader->getInterleavedFrames(start, count);
-    if (channels == 1) return interleaved;
+
+    if (channels == 1) {
+        if (pad > 0) {
+            interleaved.insert(interleaved.begin(), pad, 0.f);
+        }
+        return interleaved;
+    }
 
     sv_frame_t obtained = interleaved.size() / channels;
-    
-    floatvec_t result(obtained, 0.f);
-    
+
+    floatvec_t result(pad + obtained, 0.f);
+
     if (channel != -1) {
         // get a single channel
         for (int i = 0; i < obtained; ++i) {
-            result[i] = interleaved[i * channels + channel];
+            result[pad + i] = interleaved[i * channels + channel];
         }
     } else {
         // channel == -1, mix down all channels
         for (int i = 0; i < obtained; ++i) {
             for (int c = 0; c < channels; ++c) {
-                result[i] += interleaved[i * channels + c];
+                result[pad + i] += interleaved[i * channels + c];
             }
         }
     }
@@ -377,30 +394,43 @@ ReadOnlyWaveFileModel::getMultiChannelData(int fromchannel, int tochannel,
 
     int reqchannels = (tochannel - fromchannel) + 1;
 
+    // See getData: pad with zeros to keep the returned data aligned
+    // with the requested start frame
+    sv_frame_t pad = 0;
+
     if (start >= m_startFrame) {
         start -= m_startFrame;
     } else {
         if (count <= m_startFrame - start) {
-            return {};
+            // Requested range is entirely before our start frame:
+            // return the requested number of zeros in each channel
+            return vector<floatvec_t>(reqchannels, floatvec_t(count, 0.f));
         } else {
-            count -= (m_startFrame - start);
+            pad = m_startFrame - start;
+            count -= pad;
             start = 0;
         }
     }
 
     floatvec_t interleaved = m_reader->getInterleavedFrames(start, count);
-    if (channels == 1) return { interleaved };
+
+    if (channels == 1) {
+        if (pad > 0) {
+            interleaved.insert(interleaved.begin(), pad, 0.f);
+        }
+        return { interleaved };
+    }
 
     sv_frame_t obtained = interleaved.size() / channels;
-    vector<floatvec_t> result(reqchannels, floatvec_t(obtained, 0.f));
+    vector<floatvec_t> result(reqchannels, floatvec_t(pad + obtained, 0.f));
 
     for (int c = fromchannel; c <= tochannel; ++c) {
         int destc = c - fromchannel;
         for (int i = 0; i < obtained; ++i) {
-            result[destc][i] = interleaved[i * channels + c];
+            result[destc][pad + i] = interleaved[i * channels + c];
         }
     }
-    
+
     return result;
 }
 
@@ -429,10 +459,16 @@ ReadOnlyWaveFileModel::getSummaries(int channel, sv_frame_t start, sv_frame_t co
     if (!isOK()) return;
     ranges.reserve((count / blockSize) + 1);
 
+    // See getData: if the request begins before our start frame, we
+    // pad the front of the returned block list with empty ranges so
+    // that the result remains aligned with the requested start frame
+    sv_frame_t padFrames = 0;
+
     if (start > m_startFrame) start -= m_startFrame;
     else if (count <= m_startFrame - start) return;
     else {
-        count -= (m_startFrame - start);
+        padFrames = m_startFrame - start;
+        count -= padFrames;
         start = 0;
     }
 
@@ -493,6 +529,10 @@ ReadOnlyWaveFileModel::getSummaries(int channel, sv_frame_t start, sv_frame_t co
             ranges.push_back(Range(min, max, total / float(got)));
         }
 
+        if (padFrames > 0 && !ranges.empty()) {
+            ranges.insert(ranges.begin(), padFrames / blockSize, Range());
+        }
+
         return;
 
     } else {
@@ -543,6 +583,10 @@ ReadOnlyWaveFileModel::getSummaries(int channel, sv_frame_t start, sv_frame_t co
                 
         if (got > 0) {
             ranges.push_back(Range(min, max, total / float(got)));
+        }
+
+        if (padFrames > 0 && !ranges.empty()) {
+            ranges.insert(ranges.begin(), padFrames / blockSize, Range());
         }
     }
 
