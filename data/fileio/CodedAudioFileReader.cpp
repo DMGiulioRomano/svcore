@@ -58,7 +58,9 @@ CodedAudioFileReader::CodedAudioFileReader(CacheMode cacheMode,
     m_trimFromEnd(0),
     m_clippedCount(0),
     m_firstNonzero(0),
-    m_lastNonzero(0)
+    m_lastNonzero(0),
+    m_decodeCompleted(false),
+    m_memoryCacheKb(0)
 {
     SVDEBUG << "CodedAudioFileReader:: cache mode: " << cacheMode
             << " (" << (cacheMode == CacheInTemporaryFile
@@ -108,10 +110,33 @@ CodedAudioFileReader::~CodedAudioFileReader()
     delete m_resampler;
     delete[] m_resampleBuffer;
 
-    if (!m_data.empty()) {
+    if (m_memoryCacheKb > 0) {
         StorageAdviser::notifyDoneAllocation
-            (StorageAdviser::MemoryAllocation,
-             (m_data.size() * sizeof(float)) / 1024);
+            (StorageAdviser::MemoryAllocation, m_memoryCacheKb);
+        m_memoryCacheKb = 0;
+    }
+
+    // If the decode never completed, we may still be holding a
+    // planned allocation from recommendation time
+    StorageAdviser::releaseAllocationToken(m_allocationToken);
+}
+
+void
+CodedAudioFileReader::takeAllocationToken(StorageAdviser::AllocationToken &token)
+{
+    QMutexLocker locker(&m_cacheMutex);
+
+    // We should never be handed two tokens, but if we are, the
+    // earlier plan is superseded
+    StorageAdviser::releaseAllocationToken(m_allocationToken);
+
+    m_allocationToken = token;
+    token = StorageAdviser::AllocationToken();
+
+    if (m_decodeCompleted) {
+        // The actual allocation has already been accounted for in
+        // finishDecodeCache, so the plan is no longer needed
+        StorageAdviser::releaseAllocationToken(m_allocationToken);
     }
 }
 
@@ -374,11 +399,18 @@ CodedAudioFileReader::finishDecodeCache()
 #endif
 
     } else {
-        // I know, I know, we already allocated it...
+        // Register the actual size of the in-memory cache, now that
+        // we know it. The allocation planned at recommendation time
+        // (if we were given its token) is released just below, so
+        // the estimate is replaced by the real thing without the
+        // accounting ever dropping to zero in between
+        m_memoryCacheKb = (m_data.size() * sizeof(float)) / 1024;
         StorageAdviser::notifyPlannedAllocation
-            (StorageAdviser::MemoryAllocation,
-             (m_data.size() * sizeof(float)) / 1024);
+            (StorageAdviser::MemoryAllocation, m_memoryCacheKb);
     }
+
+    m_decodeCompleted = true;
+    StorageAdviser::releaseAllocationToken(m_allocationToken);
 
     SVDEBUG << "CodedAudioFileReader: File decodes to " << m_fileFrameCount
             << " frames" << endl;

@@ -105,12 +105,26 @@ AudioFileReaderFactory::createReader(FileSource source,
     CodedAudioFileReader::CacheMode cacheMode =
         CodedAudioFileReader::CacheInTemporaryFile;
 
+    // The recommendation below registers the prospective cache as a
+    // planned allocation straight away, so that other recommendations
+    // requested before we have finished decoding (e.g. when several
+    // files are imported in succession) cannot all lay claim to the
+    // same free space. Responsibility for the plan is handed over to
+    // the reader that ends up owning the cache; this guard releases
+    // it on every other path out of this function
+    StorageAdviser::AllocationToken cacheToken;
+    struct TokenReleaser {
+        StorageAdviser::AllocationToken &token;
+        ~TokenReleaser() { StorageAdviser::releaseAllocationToken(token); }
+    } tokenReleaser { cacheToken };
+
     if (estimatedSamples > 0) {
         size_t kb = (estimatedSamples * sizeof(float)) / 1024;
         SVDEBUG << "AudioFileReaderFactory: checking where to potentially cache "
                 << kb << "K of sample data" << endl;
         StorageAdviser::Recommendation rec =
-            StorageAdviser::recommend(StorageAdviser::SpeedCritical, kb, kb);
+            StorageAdviser::recommend(StorageAdviser::SpeedCritical, kb, kb,
+                                      cacheToken);
         if ((rec & StorageAdviser::UseMemory) ||
             (rec & StorageAdviser::PreferMemory)) {
             SVDEBUG << "AudioFileReaderFactory: cacheing (if at all) in memory" << endl;
@@ -168,15 +182,17 @@ AudioFileReaderFactory::createReader(FileSource source,
                 MP3FileReader::GaplessMode::Gapless :
                 MP3FileReader::GaplessMode::Gappy;
             
-            reader = new MP3FileReader
+            MP3FileReader *mp3Reader = new MP3FileReader
                 (source, decodeMode, cacheMode, gapless,
                  targetRate, normalised, reporter);
-            
+            reader = mp3Reader;
+
             if (reader->isOK()) {
                 if (fileUpdating && !reader->isUpdating()) {
                     SVDEBUG << "AudioFileReaderFactory: WARNING: fileUpdating set to true, but MP3 reader doesn't support it" << endl;
                 }
                 SVDEBUG << "AudioFileReaderFactory: MP3 file reader is OK, returning it" << endl;
+                mp3Reader->takeAllocationToken(cacheToken);
                 return reader;
             } else {
                 delete reader;
@@ -188,6 +204,7 @@ AudioFileReaderFactory::createReader(FileSource source,
         if (!observeFileExtension || WavFileReader::supports(source)) {
 
             reader = new WavFileReader(source, fileUpdating);
+            DecodingWavFileReader *decodingReader = nullptr;
 
             sv_samplerate_t fileRate = reader->getSampleRate();
 
@@ -199,14 +216,15 @@ AudioFileReaderFactory::createReader(FileSource source,
                  (targetRate != 0 && fileRate != targetRate))) {
 
                 SVDEBUG << "AudioFileReaderFactory: WAV file reader rate: " << reader->getSampleRate() << ", normalised " << normalised << ", seekable " << reader->isQuicklySeekable() << ", in memory " << (cacheMode == CodedAudioFileReader::CacheInMemory) << ", fileUpdating " << fileUpdating << ", creating decoding reader" << endl;
-            
+
                 delete reader;
-                reader = new DecodingWavFileReader
+                decodingReader = new DecodingWavFileReader
                     (source,
                      decodeMode, cacheMode,
                      targetRate ? targetRate : fileRate,
                      normalised,
                      reporter);
+                reader = decodingReader;
             }
 
             if (reader->isOK()) {
@@ -214,6 +232,12 @@ AudioFileReaderFactory::createReader(FileSource source,
                     SVDEBUG << "AudioFileReaderFactory: WARNING: fileUpdating set to true, but WAV reader is reporting it doesn't support it - did we create it in the wrong mode?" << endl;
                 }
                 SVDEBUG << "AudioFileReaderFactory: WAV file reader is OK, returning it" << endl;
+                if (decodingReader) {
+                    decodingReader->takeAllocationToken(cacheToken);
+                }
+                // (else the plain WAV reader reads directly from the
+                // file, no cache is allocated, and the guard releases
+                // the planned allocation)
                 return reader;
             } else {
                 delete reader;
@@ -223,15 +247,17 @@ AudioFileReaderFactory::createReader(FileSource source,
         
         if (!observeFileExtension || BQAFileReader::supports(source)) {
 
-            reader = new BQAFileReader
-                (source, decodeMode, cacheMode, 
+            BQAFileReader *bqaReader = new BQAFileReader
+                (source, decodeMode, cacheMode,
                  targetRate, normalised, reporter);
+            reader = bqaReader;
 
             if (reader->isOK()) {
                 if (fileUpdating && !reader->isUpdating()) {
                     SVDEBUG << "AudioFileReaderFactory: WARNING: fileUpdating set to true, but BQA reader doesn't support it" << endl;
                 }
                 SVDEBUG << "AudioFileReaderFactory: BQA reader is OK, returning it" << endl;
+                bqaReader->takeAllocationToken(cacheToken);
                 return reader;
             } else {
                 delete reader;

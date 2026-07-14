@@ -20,6 +20,7 @@
 #include <cstdlib>
 
 #include <QString>
+#include <QMutex>
 
 namespace sv {
 
@@ -61,6 +62,13 @@ public:
      *
      * May throw InsufficientDiscSpace exception if there appears to
      * be nowhere the minimum amount of data can be stored.
+     *
+     * Note that this overload does not account for the allocation
+     * that the recommendation is presumably about to lead to: if you
+     * call it a number of times before allocating anything, all of
+     * the recommendations will be counting the same free space. See
+     * the overload taking an AllocationToken argument for a version
+     * that registers the planned allocation immediately.
      */
     static Recommendation recommend(Criteria criteria,
                                     size_t minimumSize,
@@ -70,6 +78,72 @@ public:
         MemoryAllocation,
         DiscAllocation
     };
+
+    /**
+     * A token representing an allocation planned on behalf of a
+     * caller by the token-accepting overload of recommend(). A
+     * default-constructed token is inactive and represents no
+     * planned allocation. Tokens are freely copyable, but each
+     * planned allocation must be released exactly once through
+     * releaseAllocationToken() - so treat the active token as unique
+     * and pass it around by reference.
+     */
+    class AllocationToken {
+    public:
+        AllocationToken() : m_area(MemoryAllocation), m_size(0) { }
+
+        /** Area the allocation was planned in. Meaningless if the
+         *  token is inactive. */
+        AllocationArea getArea() const { return m_area; }
+
+        /** Size in kilobytes registered as planned by this token, or
+         *  zero if the token is inactive. */
+        size_t getSize() const { return m_size; }
+
+        bool isActive() const { return m_size > 0; }
+
+    private:
+        friend class StorageAdviser;
+        AllocationToken(AllocationArea area, size_t size) :
+            m_area(area), m_size(size) { }
+        AllocationArea m_area;
+        size_t m_size;
+    };
+
+    /**
+     * Recommend where to store some data, as above, and atomically
+     * register a planned allocation of approximately maximumSize
+     * kilobytes in the area the recommendation steers the caller
+     * towards (memory if UseMemory or PreferMemory is returned, disc
+     * otherwise). This ensures that subsequent recommendations take
+     * the allocation into account even before it has actually been
+     * made, so a series of recommendations made in advance of any of
+     * the resulting allocations cannot all promise the same free
+     * space to different prospective users.
+     *
+     * The token describing the planned allocation is returned
+     * through the token argument, replacing its previous value. The
+     * caller must eventually pass it to releaseAllocationToken(),
+     * either after abandoning the plan, or after completing the
+     * allocation and separately accounting the actual size through
+     * notifyPlannedAllocation()/notifyDoneAllocation().
+     *
+     * May throw InsufficientDiscSpace, in which case nothing is
+     * registered and the token is left untouched.
+     */
+    static Recommendation recommend(Criteria criteria,
+                                    size_t minimumSize,
+                                    size_t maximumSize,
+                                    AllocationToken &token);
+
+    /**
+     * Release an allocation planned through the token-accepting
+     * overload of recommend(), removing it from the planned-space
+     * accounting and resetting the token to inactive. Releasing an
+     * inactive token has no effect, so this is safe to call on any
+     * failure or cleanup path.
+     */
+    static void releaseAllocationToken(AllocationToken &token);
 
     /**
      * Specify that we are planning to use a given amount of storage
@@ -83,6 +157,13 @@ public:
      * previously notified using notifyPlannedAllocation.
      */
     static void notifyDoneAllocation(AllocationArea area, size_t size);
+
+    /**
+     * Return the total amount of storage (in kilobytes) currently
+     * registered as planned in the given area. Intended for
+     * diagnostics and tests.
+     */
+    static size_t getPlannedAllocation(AllocationArea area);
 
     /**
      * Force all subsequent recommendations to use the (perhaps
@@ -103,6 +184,9 @@ public:
     static void setRAMGreed(double greed);
     
 private:
+    // All statics guarded by m_mutex: recommendations may be
+    // requested, and allocations notified, from any thread
+    static QMutex m_mutex;
     static size_t m_discPlanned;
     static size_t m_memoryPlanned;
     static Recommendation m_baseRecommendation;
@@ -118,6 +202,13 @@ private:
     static QString criteriaToString(int);
     static QString recommendationToString(int);
     static QString storageStatusToString(StorageStatus);
+
+    // These must be called with m_mutex held
+    static Recommendation recommendLocked(Criteria criteria,
+                                          size_t minimumSize,
+                                          size_t maximumSize);
+    static void recordPlannedAllocation(AllocationArea area, size_t size);
+    static void recordDoneAllocation(AllocationArea area, size_t size);
 };
 
 } // end namespace sv
