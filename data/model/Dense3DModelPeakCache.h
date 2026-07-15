@@ -155,6 +155,11 @@ private:
                                           // (vector of bool is a bitmap)
     mutable bool m_finalColumnIncomplete;
 
+    // Amount registered with StorageAdviser on construction and
+    // released on destruction: the full extent the cache can grow to,
+    // even though it fills lazily
+    size_t m_plannedAllocationKb;
+
     bool haveColumn(int column) const;
     void fillColumn(int column) const;
 };

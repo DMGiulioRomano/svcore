@@ -18,6 +18,7 @@
 #include "base/Profiler.h"
 
 #include "base/HitCount.h"
+#include "base/StorageAdviser.h"
 
 namespace sv {
 
@@ -36,16 +37,32 @@ Dense3DModelPeakCache::Dense3DModelPeakCache(ModelId sourceId,
                                              int columnsPerPeak) :
     m_source(validateSource(sourceId)),
     m_columnsPerPeak(columnsPerPeak),
-    m_finalColumnIncomplete(false)
+    m_finalColumnIncomplete(false),
+    m_plannedAllocationKb(0)
 {
     if (!m_source.isNone()) {
         connect(ModelById::get(m_source).get(), &Model::modelChanged,
                 this, &Dense3DModelPeakCache::sourceModelChanged);
+
+        // The cache fills lazily, but we register the full extent it
+        // can grow to as planned straight away, so that decisions
+        // made elsewhere on the strength of the available memory
+        // (such as whether to create further caches like this one)
+        // see the space this cache is expected to consume before it
+        // has actually been filled
+        m_plannedAllocationKb =
+            (size_t(getWidth()) * getHeight() * sizeof(float)) / 1024;
+        StorageAdviser::notifyPlannedAllocation
+            (StorageAdviser::MemoryAllocation, m_plannedAllocationKb);
     }
 }
 
 Dense3DModelPeakCache::~Dense3DModelPeakCache()
 {
+    if (m_plannedAllocationKb > 0) {
+        StorageAdviser::notifyDoneAllocation
+            (StorageAdviser::MemoryAllocation, m_plannedAllocationKb);
+    }
 }
 
 Dense3DModelPeakCache::Column

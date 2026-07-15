@@ -51,9 +51,7 @@ ReadOnlyWaveFileModel::ReadOnlyWaveFileModel(FileSource source, sv_samplerate_t 
     m_updateTimer(nullptr),
     m_lastFillExtent(0),
     m_prevCompletion(0),
-    m_exiting(false),
-    m_lastDirectReadStart(0),
-    m_lastDirectReadCount(0)
+    m_exiting(false)
 {
     Profiler profiler("ReadOnlyWaveFileModel::ReadOnlyWaveFileModel");
 
@@ -482,23 +480,16 @@ ReadOnlyWaveFileModel::getSummaries(int channel, sv_frame_t start, sv_frame_t co
     if (cacheType != 0 && cacheType != 1) {
 
         // We need to read directly from the file.  We haven't got
-        // this cached.  Hope the requested area is small.  This is
-        // not optimal -- we'll end up reading the same frames twice
-        // for stereo files, in two separate calls to this method.
-        // We could fairly trivially handle this for most cases that
-        // matter by putting a single cache in getInterleavedFrames
-        // for short queries.
+        // this cached.  Hope the requested area is small.  Recent
+        // reads are kept in a small LRU cache (see
+        // getDirectReadData) so that views repainting repeatedly
+        // over unchanging ranges, possibly different for each view,
+        // do not have to hit the file every time.  The same read is
+        // reused for each channel of the same range.
 
         m_directReadMutex.lock();
 
-        if (m_lastDirectReadStart != start ||
-            m_lastDirectReadCount != count ||
-            m_directRead.empty()) {
-
-            m_directRead = m_reader->getInterleavedFrames(start, count);
-            m_lastDirectReadStart = start;
-            m_lastDirectReadCount = count;
-        }
+        const floatvec_t &data = getDirectReadData(start, count);
 
         float max = 0.0, min = 0.0, total = 0.0;
         sv_frame_t i = 0, got = 0;
@@ -506,16 +497,16 @@ ReadOnlyWaveFileModel::getSummaries(int channel, sv_frame_t start, sv_frame_t co
         while (i < count) {
 
             sv_frame_t index = i * channels + channel;
-            if (index >= (sv_frame_t)m_directRead.size()) break;
-            
-            float sample = m_directRead[index];
+            if (index >= (sv_frame_t)data.size()) break;
+
+            float sample = data[index];
             if (sample > max || got == 0) max = sample;
             if (sample < min || got == 0) min = sample;
             total += fabsf(sample);
 
             ++i;
             ++got;
-            
+
             if (got == blockSize) {
                 ranges.push_back(Range(min, max, total / float(got)));
                 min = max = total = 0.0f;
@@ -594,6 +585,58 @@ ReadOnlyWaveFileModel::getSummaries(int channel, sv_frame_t start, sv_frame_t co
     cerr << "returning " << ranges.size() << " ranges" << endl;
 #endif
     return;
+}
+
+const floatvec_t &
+ReadOnlyWaveFileModel::getDirectReadData(sv_frame_t start,
+                                         sv_frame_t count) const
+{
+    // Must be called with m_directReadMutex held.
+    //
+    // We keep a small LRU cache of recent direct reads: several
+    // views showing different ranges of the same model at a fine
+    // zoom level repaint independently of one another, and with only
+    // a single read retained (as we formerly did) they would evict
+    // one another's data and force a fresh read from the file on
+    // every repaint.
+
+    for (auto i = m_directReadCache.begin();
+         i != m_directReadCache.end(); ++i) {
+        if (i->start == start && i->count == count) {
+            m_directReadCache.splice
+                (m_directReadCache.begin(), m_directReadCache, i);
+            return m_directReadCache.front().data;
+        }
+    }
+
+    m_directReadCache.push_front
+        ({ start, count, m_reader->getInterleavedFrames(start, count) });
+    m_directReadCacheBytes +=
+        m_directReadCache.front().data.size() * sizeof(float);
+
+    // Bound both the entry count and the total size, always
+    // retaining at least the entry we are about to return
+    const size_t maxEntries = 8;
+    const size_t maxBytes = 32 * 1024 * 1024;
+    while (m_directReadCache.size() > 1 &&
+           (m_directReadCache.size() > maxEntries ||
+            m_directReadCacheBytes > maxBytes)) {
+        m_directReadCacheBytes -=
+            m_directReadCache.back().data.size() * sizeof(float);
+        m_directReadCache.pop_back();
+    }
+
+    return m_directReadCache.front().data;
+}
+
+void
+ReadOnlyWaveFileModel::invalidateDirectReadCache()
+{
+    // Called when the underlying reader may have gained more frames,
+    // which would make previously truncated direct reads stale
+    QMutexLocker locker(&m_directReadMutex);
+    m_directReadCache.clear();
+    m_directReadCacheBytes = 0;
 }
 
 ReadOnlyWaveFileModel::Range
@@ -681,6 +724,7 @@ ReadOnlyWaveFileModel::fillTimerTimedOut()
         SVCERR << "ReadOnlyWaveFileModel(" << objectName() << ")::fillTimerTimedOut: extent = " << fillExtent << endl;
 #endif
         if (fillExtent > m_lastFillExtent) {
+            invalidateDirectReadCache();
             emit modelChangedWithin(getId(), m_lastFillExtent, fillExtent);
             m_lastFillExtent = fillExtent;
         }
@@ -703,6 +747,7 @@ ReadOnlyWaveFileModel::cacheFilled()
     auto prevFillExtent = m_lastFillExtent;
     m_lastFillExtent = getEndFrame();
     m_mutex.unlock();
+    invalidateDirectReadCache();
 #ifdef DEBUG_WAVE_FILE_MODEL
     SVCERR << "ReadOnlyWaveFileModel(" << objectName() << ")::cacheFilled, about to emit things" << endl;
 #endif

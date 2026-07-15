@@ -15,6 +15,8 @@
 #include "TestZoomConstraints.h"
 #include "TestWaveformOversampler.h"
 #include "TestSparseModels.h"
+#include "TestDense3DModelPeakCache.h"
+#include "TestReadOnlyWaveFileModel.h"
 
 #include "system/Init.h"
 
@@ -54,6 +56,18 @@ int main(int argc, char *argv[])
 
     {
         TestSparseModels t;
+        if (QTest::qExec(&t, argc, argv) == 0) ++good;
+        else ++bad;
+    }
+
+    {
+        TestDense3DModelPeakCache t;
+        if (QTest::qExec(&t, argc, argv) == 0) ++good;
+        else ++bad;
+    }
+
+    {
+        TestReadOnlyWaveFileModel t;
         if (QTest::qExec(&t, argc, argv) == 0) ++good;
         else ++bad;
     }

@@ -30,6 +30,7 @@
 #include <stdlib.h>
 
 #include <atomic>
+#include <list>
 
 namespace sv {
 
@@ -153,11 +154,28 @@ protected:
     std::atomic<bool> m_exiting;
     static PowerOfSqrtTwoZoomConstraint m_zoomConstraint;
 
-    mutable floatvec_t m_directRead;
-    mutable sv_frame_t m_lastDirectReadStart;
-    mutable sv_frame_t m_lastDirectReadCount;
+    // Direct reads are used by getSummaries when the zoom level is
+    // finer than the coarsest-grained range cache: they bypass the
+    // range caches and read from the file itself. We keep a small
+    // LRU cache of them so that several views showing different
+    // ranges of the same model can repaint repeatedly without
+    // re-reading from the file every time. Guarded by
+    // m_directReadMutex
+    struct DirectReadEntry {
+        sv_frame_t start;
+        sv_frame_t count;
+        floatvec_t data;
+    };
+    mutable std::list<DirectReadEntry> m_directReadCache; // front is MRU
+    mutable size_t m_directReadCacheBytes = 0;
     mutable QMutex m_directReadMutex;
-};    
+
+    // Must be called with m_directReadMutex held; the returned
+    // reference remains valid only while it is
+    const floatvec_t &getDirectReadData(sv_frame_t start,
+                                        sv_frame_t count) const;
+    void invalidateDirectReadCache();
+};
 
 } // end namespace sv
 
