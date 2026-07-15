@@ -208,11 +208,19 @@ AudioFileReaderFactory::createReader(FileSource source,
 
             sv_samplerate_t fileRate = reader->getSampleRate();
 
+            // A quickly-seekable file that needs no decoding,
+            // resampling, or normalisation can be returned as a
+            // direct reader at no loading cost. Copying it into an
+            // in-memory cache anyway can make subsequent access
+            // faster, but only makes sense for reasonably short
+            // files: for long ones the memory and loading-time cost
+            // is far too high (see isWorthCopyingToMemory)
             if (reader->isOK() &&
                 (!reader->isQuicklySeekable() ||
                  normalised ||
                  (cacheMode == CodedAudioFileReader::CacheInMemory &&
-                  !fileUpdating) ||
+                  !fileUpdating &&
+                  isWorthCopyingToMemory(estimatedSamples)) ||
                  (targetRate != 0 && fileRate != targetRate))) {
 
                 SVDEBUG << "AudioFileReaderFactory: WAV file reader rate: " << reader->getSampleRate() << ", normalised " << normalised << ", seekable " << reader->isQuicklySeekable() << ", in memory " << (cacheMode == CodedAudioFileReader::CacheInMemory) << ", fileUpdating " << fileUpdating << ", creating decoding reader" << endl;
