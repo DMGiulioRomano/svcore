@@ -90,6 +90,17 @@ protected:
 
     void initialiseDecodeCache(); // samplerate, channels must have been set
 
+    /**
+     * Reserve space in the in-memory decode cache for the given
+     * number of source frames, if the cache mode is CacheInMemory
+     * and the subclass knows the total in advance. Any resampling
+     * ratio is applied here. This avoids repeated reallocation (and
+     * the associated transient memory peaks and stalls under lock)
+     * while decoding large files; it is optional and has no effect
+     * on the result. Call after initialiseDecodeCache().
+     */
+    void reserveDecodeCacheSpace(sv_frame_t sourceFrameCount);
+
     // compensation for encoder delays:
     void setFramesToTrim(sv_frame_t fromStart, sv_frame_t fromEnd);
     

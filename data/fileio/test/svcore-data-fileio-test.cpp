@@ -13,6 +13,7 @@
 */
 
 #include "AudioFileReaderTest.h"
+#include "AudioFileReaderFactoryTest.h"
 #include "BogusAudioFileReaderTest.h"
 #include "AudioFileWriterTest.h"
 #include "EncodingTest.h"
@@ -56,6 +57,12 @@ int main(int argc, char *argv[])
 
     {
         AudioFileReaderTest t(testDir);
+        if (QTest::qExec(&t, argc, argv) == 0) ++good;
+        else ++bad;
+    }
+
+    {
+        AudioFileReaderFactoryTest t;
         if (QTest::qExec(&t, argc, argv) == 0) ++good;
         else ++bad;
     }

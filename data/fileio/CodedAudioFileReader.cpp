@@ -296,6 +296,40 @@ CodedAudioFileReader::initialiseDecodeCache()
 }
 
 void
+CodedAudioFileReader::reserveDecodeCacheSpace(sv_frame_t sourceFrameCount)
+{
+    QMutexLocker locker(&m_cacheMutex);
+
+    if (!m_initialised ||
+        m_cacheMode != CacheInMemory ||
+        sourceFrameCount <= 0 ||
+        m_channelCount == 0) {
+        return;
+    }
+
+    double ratio = 1.0;
+    if (m_fileRate != 0 && m_sampleRate != 0 && m_sampleRate != m_fileRate) {
+        ratio = m_sampleRate / m_fileRate;
+    }
+
+    size_t samples =
+        size_t(double(sourceFrameCount) * ratio + 1) * m_channelCount;
+
+    SVDEBUG << "CodedAudioFileReader::reserveDecodeCacheSpace: reserving "
+            << samples << " samples" << endl;
+
+    QMutexLocker dataLocker(&m_dataLock);
+    try {
+        m_data.reserve(samples);
+    } catch (const std::bad_alloc &) {
+        // Not fatal: decoding will attempt to grow the cache
+        // incrementally anyway
+        SVDEBUG << "CodedAudioFileReader::reserveDecodeCacheSpace: "
+                << "reservation failed, continuing without" << endl;
+    }
+}
+
+void
 CodedAudioFileReader::addSamplesToDecodeCache(float **samples, sv_frame_t nframes)
 {
     QMutexLocker locker(&m_cacheMutex);

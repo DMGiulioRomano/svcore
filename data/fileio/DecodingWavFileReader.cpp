@@ -67,6 +67,11 @@ DecodingWavFileReader::DecodingWavFileReader(FileSource source,
 
     initialiseDecodeCache();
 
+    // We know the source length up front, unusually for a decoding
+    // reader, so we can reserve the whole decode cache in one go
+    // instead of letting it grow by repeated reallocation
+    reserveDecodeCacheSpace(m_original->getFrameCount());
+
     if (decodeMode == DecodeAtOnce) {
 
         if (m_reporter) {

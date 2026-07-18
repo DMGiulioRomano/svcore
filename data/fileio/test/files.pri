@@ -1,6 +1,7 @@
 
 TEST_HEADERS += \
 	../../model/test/MockWaveModel.h \
+	AudioFileReaderFactoryTest.h \
 	AudioFileReaderTest.h \
 	UnsupportedFormat.h \
 	BogusAudioFileReaderTest.h \

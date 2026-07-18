@@ -796,6 +796,19 @@ ReadOnlyWaveFileModel::RangeCacheFillThread::run()
         means[i] = 0.f;
     }
 
+    if (!updating) {
+        // The frame count is known and will not change: reserve the
+        // cache vectors up front, so that the fill loop does not
+        // repeatedly reallocate them while holding the mutex that
+        // the GUI thread contends for when painting from them
+        sv_frame_t frames = m_model.getFrameCount();
+        QMutexLocker locker(&m_model.m_mutex);
+        for (int cacheType = 0; cacheType < 2; ++cacheType) {
+            m_model.m_cache[cacheType].reserve
+                ((frames / cacheBlockSize[cacheType] + 1) * channels);
+        }
+    }
+
     SVDEBUG << "ReadOnlyWaveFileModel(" << m_model.getId() << ")::RangeCacheFillThread: entering loop" << endl;
     
     bool first = true;
